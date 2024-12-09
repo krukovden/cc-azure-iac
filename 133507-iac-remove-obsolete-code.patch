@@ -1,0 +1,54 @@
+diff --git a/Infrastructure/APIM/locals.tf b/Infrastructure/APIM/locals.tf
+index 8ca715d..072c535 100644
+--- a/Infrastructure/APIM/locals.tf
++++ b/Infrastructure/APIM/locals.tf
+@@ -35,8 +35,6 @@ locals {
+   database_server_name = "cc-cp-norm-server-${local.region_env}"
+ 
+   client_ids = [ for client in data.postgresql_query.get_clients.rows : client.client_id ]
+-  undefined_onboarding_ui = "undefined-onboarding-ui"
+-  onboarding_client_id = length(data.postgresql_query.get_ui_client.rows) > 0 ? data.postgresql_query.get_ui_client.rows[0].client_id : local.undefined_onboarding_ui
+ 
+   apps_ids = formatlist("<application-id>%s</application-id>", local.client_ids)
+ 
+@@ -60,22 +58,6 @@ locals {
+   <rate-limit-by-key calls="20" renewal-period="1" counter-key="@((string)context.Variables["clientId"])" />
+   XML
+ 
+-  active_client_xml_block = <<-XML
+-    <set-variable name="active-client" value="@(context.Request.Headers.GetValueOrDefault("cc-active-client", "unknown"))" />
+-    <choose>
+-        <when condition="@((string)context.Variables["active-client"] != null &&
+-                          (string)context.Variables["active-client"] != "unknown" &&
+-                          (string)context.Variables["clientId"] == "${local.onboarding_client_id}")">
+-            <!-- Set the header value with the value from another header parameter -->
+-            <set-header name="cc-clientid" exists-action="override">
+-                <value>@((string)context.Variables["active-client"])</value>
+-            </set-header>
+-        </when>
+-        <otherwise>
+-            <!-- Optionally, you can add a default action if the header does not exist -->
+-        </otherwise>
+-    </choose>
+-  XML
+ 
+ # Add cors policy only in dev environment
+   apim_cors_policy = <<XML
+@@ -95,17 +77,12 @@ locals {
+     </cors>
+   XML
+ 
+-
+-
+-  replace_client_id = local.onboarding_client_id != local.undefined_onboarding_ui ? local.active_client_xml_block : "<!-- Undefined Onboarding Tool -->"
+-
+   client_validation =  join("",
+     [
+       local.apim_authentication, 
+       local.apim_set_clientid_variable, 
+       local.apim_set_clientid_header, 
+       local.rate_limit_by_key_policy,
+-      local.replace_client_id,
+       local.apim_cors_policy
+     ])
+ 
