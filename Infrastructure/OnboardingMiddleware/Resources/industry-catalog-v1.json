@@ -1,0 +1,113 @@
+[
+    {
+        "GroupingOrder": 1,
+        "GroupingDescription": "1-By Ship Type",
+        "GroupingCategoryName": "By Ship Type",
+        "GroupingNames": [
+            "General Cargo Ship",
+            "Container Ship",
+            "Bulk Carrier",
+            "Refrigerated Cargo Carrier",
+            "Ro-ro Cargo Ship (vehicle carrier)",
+            "Ro-ro Cargo Ship",
+            "Ro-ro Passenger Ship",
+            "Tanker",
+            "LNG carrier",
+            "Gas Carrier",
+            "Combination carrier",
+            "Cruise Passenger Ship",
+            "IMO",
+            "High Speed Patrol Vessel",
+            "High Speed Catamaran Passenger Ferry",
+            "High Speed Crew and Supply Vessel",
+            "High Speed Launch",
+            "High Speed Offshore Rescue Boat",
+            "High Speed Pilot Launch"
+        ]
+    },
+    {
+        "GroupingOrder": 2,
+        "GroupingDescription": "2-By Size",
+        "GroupingCategoryName": "By Size",
+        "GroupingNames": [
+            "Small Feeder",
+            "Feeder",
+            "Feedermax",
+            "Mini",
+            "Handysize",
+            "Handymax",
+            "Supramax",
+            "Capesize",
+            "Panamax",
+            "Neopanamax",
+            "Post Panamax",
+            "Post-Neopanamax",
+            "Malaccamax",
+            "Kamsarmax",
+            "Newcastlemax",
+            "Setouchmax",
+            "Seawaymax",
+            "Dunkirkmax",
+            "Chinamax"
+        ]
+    },
+    {
+        "GroupingOrder": 3,
+        "GroupingDescription": "3-By Cargo Carried ",
+        "GroupingCategoryName": "By Cargo Carried ",
+        "GroupingNames": [
+            "Refrigerated Container",
+            "Non-refrigerated Container",
+            "Grain Carrier",
+            "Wood Carrier",
+            "Ore Carrier",
+            "Cruder Oil Tanker",
+            "Product Tanker",
+            "Chemical Tanker",
+            "Gas carrier",
+            "Liquified Gas Tanker- LNG carrier",
+            "Liquified Gas Tanker - LPG carrier",
+            "Oil/Bulk/Ore (OBO)",
+            "Liquified Gas Tanker - other",
+            "ConRo",
+            "Oil/Chemical Tanker",
+            "Crude oil/Product Tanker",
+            "Ship Other Than Oil Tankers Carrying Oil",
+            "Ore or Oil Carrier",
+            "Bulk and Chemical Carrier"
+        ]
+    },
+    {
+        "GroupingOrder": 4,
+        "GroupingDescription": "4-By Class",
+        "GroupingCategoryName": "By Class",
+        "GroupingNames": [
+            "American Bureau of Shipping\u00A0(ABS)",
+            "Det Norske Veritas\u00A0(DNV)",
+            "Lloyd\u0027s Register (LR)",
+            "Bureau Veritas (BV)",
+            "Nippon Kaiji Kyokai (Class NK)",
+            "China Classification Society (CCS)",
+            "Korean Register of shipping (KR)",
+            "Indian Register of Shipping",
+            "Coratian Register of Shipping (CRS)",
+            "Polish Register of Shipping (PRS)",
+            "Registro Italiano Navale (RINA)"
+        ]
+    },
+    {
+        "GroupingOrder": 5,
+        "GroupingDescription": "5-By Operation",
+        "GroupingCategoryName": "By Operation",
+        "GroupingNames": [
+            "Owned",
+            "Operated",
+            "Chartered ",
+            "Managed",
+            "Owned/Operated",
+            "Managed/Operated",
+            "Owned/Managed",
+            "Owned/Managed/Operated"
+        ]
+    }
+]

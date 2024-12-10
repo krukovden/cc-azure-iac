@@ -558,10 +558,12 @@ resource "azurerm_storage_container" "vesselCatalogBlobStorageContainer" {
   container_access_type = local.onboarding_middleware_vessel_catalog_storage_account_blob_config.container_access_type
 }
 
-resource "azurerm_storage_queue" "vesselCatalogBlobAddedQueue" {
-  name                 = local.onboarding_middleware_vessel_catalog_storage_account_blob_config.blob_added_queue_name
-  storage_account_name = azurerm_storage_account.vesselCatalogBlobStorageAccount.name
-  depends_on           = [azurerm_storage_account.vesselCatalogBlobStorageAccount]
+resource "azurerm_storage_blob" "industryCatalog" {
+  name                   = "industry/industry-catalog-v1.json"
+  storage_account_name   = azurerm_storage_account.vesselCatalogBlobStorageAccount.name
+  storage_container_name = azurerm_storage_container.vesselCatalogBlobStorageContainer.name
+  type                   = "Block"
+  source                 = "./Resources/industry-catalog-v1.json"
 }
 
 resource "azurerm_eventgrid_event_subscription" "vesselCatalogBlobAddedSubscription" {
@@ -579,6 +581,20 @@ resource "azurerm_eventgrid_event_subscription" "vesselCatalogBlobAddedSubscript
     azurerm_storage_queue.vesselCatalogBlobAddedQueue,
     azurerm_storage_account.vesselCatalogBlobStorageAccount
   ]
+}
+
+resource "azurerm_storage_blob" "organizationCatalog" {
+  name                   = "organization/organization-catalog-v1.json"
+  storage_account_name   = azurerm_storage_account.vesselCatalogBlobStorageAccount.name
+  storage_container_name = azurerm_storage_container.vesselCatalogBlobStorageContainer.name
+  type                   = "Block"
+  source                 = "./Resources/organization-catalog-v1.json"
+}
+
+resource "azurerm_storage_queue" "vesselCatalogBlobAddedQueue" {
+  name                 = local.onboarding_middleware_vessel_catalog_storage_account_blob_config.blob_added_queue_name
+  storage_account_name = azurerm_storage_account.vesselCatalogBlobStorageAccount.name
+  depends_on           = [azurerm_storage_account.vesselCatalogBlobStorageAccount]
 }
 
 module "onboardingmiddleware_vessel_catalog_processor_linux_function_app" {

@@ -55,6 +55,8 @@ permissions:
 
 env:
   TF_VAR_CLIENT_ONBOARDING_ID: ${{ inputs.client_id }}
+  TF_DATABASE_USERNAME: ${{ secrets.DATABASE_USERNAME }}
+  TF_DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
 
 jobs:
   check_condition:
@@ -136,6 +138,9 @@ jobs:
           echo "ARM_CLIENT_SECRET=${{ env.ARM_CLIENT_SECRET }}" >> $GITHUB_ENV
           echo "ARM_TENANT_ID=${{ env.ARM_TENANT_ID }}" >> $GITHUB_ENV
           echo "ARM_SUBSCRIPTION_ID=${{ env.ARM_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "TF_VAR_REGION_CODE"=${{ vars.REGION_CODE }} >> $GITHUB_ENV
+          echo "TF_VAR_REGION_SUFFIX"=${{ vars.REGION_SUFFIX }} >> $GITHUB_ENV
+          echo "TF_VAR_ENV=${{ vars.ENV_SUFFIX }}" >> $GITHUB_ENV   
 
       - name: Format Connection String
         id: format-connection-string
@@ -160,7 +165,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: "abs-wavesight/cc-azure-iac"
-          ref: "main"
+          ref: "${{ github.ref_name }}"
           token: ${{ secrets.GH_PAT }}
 
       - name: "Terraform Init"
@@ -173,11 +178,12 @@ jobs:
         shell: bash
         working-directory: Infrastructure/ClientOnboarding
         run: |
-          terraform apply -var=client_id=${{ inputs.client_id }} -var=skip_if_onboarding_ui=${{ inputs.client_type == 'Onboarding Tool' }} -auto-approve
+          terraform apply -var=client_id=${{ inputs.client_id }} -var=skip_if_onboarding_ui=${{ inputs.client_type == 'Onboarding Tool' }}  -auto-approve
           echo "::set-output name=CLIENT_RMQ_CONNECTION_STRING::$(terraform output -raw client_rmq_connection_string)"
 
       - uses: liquibase-github-actions/execute-sql@v4.27.0
         name: Execute insert client rmq connection string SQL
+        if: ${{ steps.create_rmq_resources.outputs.CLIENT_RMQ_CONNECTION_STRING != '' }}
         with:
           sql: |
             INSERT INTO public.client_settings(client_id, rmq_connection_string) 
