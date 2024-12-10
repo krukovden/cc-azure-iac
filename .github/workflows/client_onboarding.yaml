@@ -1,0 +1,210 @@
+name: CommonCore Client Onboarding
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        description: 'Environment'
+        options:
+          - 'Dev South Central US'
+          - 'Dev Central Canada'
+
+          - 'QA South Central US'
+          - 'QA Central Canada'
+
+          - 'Staging South Central US'
+      client_id:
+        description: "Client Id"
+        type: string
+        required: true
+      client_type:
+        type: choice
+        description: 'Client type'
+        options:
+          - 'MDF'
+          - 'Onboarding Tool'
+          - 'Test (this option is just for Dev env)'
+      client_name:
+        description: "Client name"
+        type: string
+        required: false      
+
+  workflow_call:
+    inputs:
+      client_id:
+        description: "Client Id"
+        type: string
+        required: true
+      client_name:
+        description: "Client name"
+        type: string
+        required: false
+      client_type:
+        description: 'Client type'
+        type: string
+        required: false      
+      use_environment:
+       required: true
+       type: string
+       description: "Target Environment"
+
+permissions:
+  id-token: "write"
+  contents: read
+
+env:
+  TF_VAR_CLIENT_ONBOARDING_ID: ${{ inputs.client_id }}
+
+jobs:
+  check_condition:
+    runs-on: ubuntu-latest
+    name: Verify client type and environment
+    steps:
+      - name: Check if client type and environment match
+        run: |
+          if [[ "${{ inputs.client_type }}" == Test* && "${{ inputs.environment }}" != Dev* ]]; then
+            echo "Error: 'Test' client_type can only be used with 'Dev' environments."
+            exit 1
+          fi
+
+  config:
+    runs-on: ubuntu-latest
+    needs: [check_condition]
+    name: Start for ${{ github.event.inputs.ENVIRONMENT }} Environment
+    environment:  ${{  github.event.inputs.environment }}
+    outputs:   
+      db_resource_name: ${{ steps.set-env-output.outputs.db_resource_name }}      
+      dbResourceGroupName: ${{ steps.set-env-output.outputs.dbResourceGroupName }}    
+    steps:      
+      - name: Setup Configuration
+        id: set-env-output
+        shell: pwsh
+        run: |
+          echo "Configuring environment variables..."   
+          $region ='${{vars.REGION_SUFFIX }}' 
+          $env_suffix = '${{ vars.ENV_SUFFIX }}'
+          $env_suffix_lower = $env_suffix.ToLower() 
+          
+          $dbResourceName="cc-cp-norm-server-$region-${env_suffix_lower}"   
+
+          $resource_group_name='rg-{0}-commoncore-001' -f $region    
+          $dbResourceGroupName = "$resource_group_name-data"                   
+         
+          echo "::set-output name=db_resource_name::$dbResourceName"            
+          echo "::set-output name=dbResourceGroupName::$dbResourceGroupName"
+          
+  retrieve-configuration:
+    needs: [config] 
+    name: Retrieve DB Configuration
+    uses: abs-wavesight/cc-azure-iac/.github/workflows/get-db-string.yaml@main   
+    if: success()
+    secrets: inherit     
+    with:      
+      use_environment: ${{ github.event.inputs.environment }}
+      resource_group_name: ${{ needs.config.outputs.dbResourceGroupName }}
+      resource_name: ${{ needs.config.outputs.db_resource_name }}
+
+  client-database-and-rmq-resources:
+    name: "Insert client in database and create RMQ resources"
+    environment:  ${{  inputs.use_environment || github.event.inputs.environment }}
+    needs: [retrieve-configuration]
+    runs-on: ubuntu-latest
+    steps:   
+      - name: Set GitHub variables.
+        id: set-region-variables
+        env:
+          TF_RMQ_CONNECTION_STRING: ${{ secrets.TF_RMQ_CONNECTION_STRING }}
+          TF_RMQ_PASS: ${{ secrets.TF_RMQ_PASS }} 
+          TF_RMQ_URL: ${{ secrets.TF_RMQ_URL }} 
+          TF_RMQ_USER: ${{ secrets.TF_RMQ_USER }} 
+          TF_RMQ_VHOST: ${{ secrets.TF_RMQ_VHOST }} 
+          TF_RMQ_PORT: ${{ secrets.TF_RMQ_PORT }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.AZURE_AD_CLIENT_SECRET }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        shell: bash
+        run: |
+          echo "TF_RMQ_CONNECTION_STRING=${{ env.TF_RMQ_CONNECTION_STRING }}" >> $GITHUB_ENV
+          echo "TF_RMQ_PASS=${{ env.TF_RMQ_PASS }}" >> $GITHUB_ENV
+          echo "TF_RMQ_URL=${{ env.TF_RMQ_URL }}" >> $GITHUB_ENV
+          echo "TF_RMQ_USER=${{ env.TF_RMQ_USER }}" >> $GITHUB_ENV
+          echo "TF_RMQ_VHOST=${{ env.TF_RMQ_VHOST }}" >> $GITHUB_ENV
+          echo "TF_RMQ_PORT=${{ env.TF_RMQ_PORT }}" >> $GITHUB_ENV
+          echo "ARM_CLIENT_ID=${{ env.ARM_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "ARM_CLIENT_SECRET=${{ env.ARM_CLIENT_SECRET }}" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ env.ARM_TENANT_ID }}" >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ env.ARM_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+
+      - name: Format Connection String
+        id: format-connection-string
+        run: |
+            DATABASE_URL="jdbc:postgresql://${{ needs.retrieve-configuration.outputs.fqdn_string }}:5432/${{ needs.retrieve-configuration.outputs.database_name }}?sslmode=require"
+            echo "::set-output name=database_url::$DATABASE_URL"    
+
+      - uses: liquibase-github-actions/execute-sql@v4.27.0
+        name: Execute insert client SQL
+        with:
+          sql: |
+            INSERT INTO public.client(client_id, client_name, update_datetime, tags)
+            VALUES ('${{ inputs.client_id }}', '${{ inputs.client_name }}', NOW(), CASE WHEN ${{ inputs.client_type == 'Onboarding Tool' }} THEN 'ui_tool' WHEN ${{ inputs.client_type == 'MDF' }} THEN 'mdf' ELSE NULL END)
+            ON CONFLICT (client_id)
+            DO UPDATE SET client_name = EXCLUDED.client_name, update_datetime = EXCLUDED.update_datetime;
+          url: ${{ steps.format-connection-string.outputs.database_url }}
+          username: ${{ secrets.DATABASE_USERNAME }}
+          password: ${{ secrets.DATABASE_PASSWORD }}
+          headless: true
+          logLevel: INFO
+
+      - uses: actions/checkout@v4
+        with:
+          repository: "abs-wavesight/cc-azure-iac"
+          ref: "main"
+          token: ${{ secrets.GH_PAT }}
+
+      - name: "Terraform Init"
+        shell: bash
+        working-directory: ./Infrastructure/ClientOnboarding
+        run: terraform init
+
+      - name: "Terraform Apply"
+        id: create_rmq_resources
+        shell: bash
+        working-directory: Infrastructure/ClientOnboarding
+        run: |
+          terraform apply -var=client_id=${{ inputs.client_id }} -var=skip_if_onboarding_ui=${{ inputs.client_type == 'Onboarding Tool' }} -auto-approve
+          echo "::set-output name=CLIENT_RMQ_CONNECTION_STRING::$(terraform output -raw client_rmq_connection_string)"
+
+      - uses: liquibase-github-actions/execute-sql@v4.27.0
+        name: Execute insert client rmq connection string SQL
+        with:
+          sql: |
+            INSERT INTO public.client_settings(client_id, rmq_connection_string) 
+            VALUES ('${{ inputs.client_id }}', '${{ steps.create_rmq_resources.outputs.CLIENT_RMQ_CONNECTION_STRING }}')
+            ON CONFLICT (client_id)
+            DO UPDATE SET rmq_connection_string = EXCLUDED.rmq_connection_string;
+          url: ${{ steps.format-connection-string.outputs.database_url }}
+          username: ${{ secrets.DATABASE_USERNAME }}
+          password: ${{ secrets.DATABASE_PASSWORD }}
+          headless: true
+          logLevel: INFO
+
+      - name: "Setup Azure KeyVault secret"
+        if: inputs.client_type == 'Onboarding Tool'
+        uses: abs-wavesight/cc-platform/actions/az-keyvault-set-secret@main
+        with:
+          keyvault_name: ${{ format('kv-cc-cp-{0}-{1}', vars.REGION_SUFFIX , vars.ENV_SUFFIX) }}
+          secret_name: "UIClientId"
+          secret_value: ${{ env.TF_VAR_CLIENT_ONBOARDING_ID }}
+
+  deploy-apim:
+    name: "Deploying APIM Infrastructure"
+    uses: abs-wavesight/cc-azure-iac/.github/workflows/deploy_infrastructure.yaml@main
+    needs: [client-database-and-rmq-resources]
+    with:
+      use_environment: ${{ inputs.use_environment || github.event.inputs.environment }}
+      working-directory: APIM     
+      backend_tfvars_file: "backend.tfvars"      
+      perform_apply: true
+    secrets: inherit

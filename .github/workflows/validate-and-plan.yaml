@@ -1,0 +1,94 @@
+name: Terraform - Validate and plan
+
+on:
+  workflow_call:
+    inputs:
+      use_environment:
+       required: true
+       type: string
+       description: "Target Environment"
+      working-directory:
+        description: "Working directory for Terraform resources"
+        type: string
+        required: true      
+      config_tfvars_file:
+        description: "Terraform tfvars configuration file"
+        required: false
+        type: string
+      backend_tfvars_file:
+        description: "Terraform tfvars backend file"
+        required: true
+        type: string
+
+env:
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.AZURE_AD_CLIENT_SECRET }}  
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  GH_TOKEN: ${{ secrets.GH_PAT }}
+  GH_PUBLISHER_NAME: ${{ github.triggering_actor }} 
+  TF_DATABASE_USERNAME: ${{ secrets.DATABASE_USERNAME }}
+  TF_DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+jobs:
+  validate:
+    name: Validate terraform
+    runs-on: ubuntu-latest
+    environment:  ${{ inputs.use_environment }}
+    steps:
+      - name: "Checkout Current Directory"
+        uses: actions/checkout@v3
+  
+      - name: "Checkout Private Modules"
+        uses: actions/checkout@v3
+        with:
+          repository: abs-wavesight/azure-infra-terraform-modules
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          path: SharedModules
+  
+      - name: "AZ Login"
+        uses: abs-wavesight/github-action-workflows/actions/az-login@main
+        with:
+          subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}     
+          
+      - name: Set GitHub variables.
+        id: set-region-variables
+        env: 
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID}}
+          TF_RMQ_CONNECTION_STRING: ${{ secrets.TF_RMQ_CONNECTION_STRING }}
+          TF_RMQ_PASS: ${{ secrets.TF_RMQ_PASS }} 
+          TF_RMQ_URL: ${{ secrets.TF_RMQ_URL }} 
+          TF_RMQ_USER: ${{ secrets.TF_RMQ_USER }} 
+          TF_RMQ_VHOST: ${{ secrets.TF_RMQ_VHOST }} 
+          TF_RMQ_PORT: ${{ secrets.TF_RMQ_PORT }}         
+          TF_APIM_TENANT: ${{ secrets.TF_APIM_TENANT }}  
+        shell: bash
+        run: |
+          echo "TF_RMQ_CONNECTION_STRING=${{ env.TF_RMQ_CONNECTION_STRING }}" >> $GITHUB_ENV
+          echo "TF_RMQ_PASS=${{ env.TF_RMQ_PASS }}" >> $GITHUB_ENV
+          echo "TF_RMQ_URL=${{ env.TF_RMQ_URL }}" >> $GITHUB_ENV
+          echo "TF_RMQ_USER=${{ env.TF_RMQ_USER }}" >> $GITHUB_ENV
+          echo "TF_RMQ_VHOST=${{ env.TF_RMQ_VHOST }}" >> $GITHUB_ENV
+          echo "TF_RMQ_PORT=${{ env.TF_RMQ_PORT }}" >> $GITHUB_ENV          
+          echo "TF_APIM_TENANT=${{ env.TF_APIM_TENANT }}" >> $GITHUB_ENV
+          echo "TF_ENV=${{ vars.ENV_SUFFIX}}" >> $GITHUB_ENV   
+          echo "TF_VAR_ENV=${{ vars.ENV_SUFFIX }}" >> $GITHUB_ENV               
+          echo "ARM_SUBSCRIPTION_ID=${{ env.ARM_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "TF_VAR_REGION_SUFFIX"=${{ vars.REGION_SUFFIX }} >> $GITHUB_ENV
+          echo "TF_VAR_REGION_CODE"=${{ vars.REGION_CODE }} >> $GITHUB_ENV
+
+      - name: Terraform Init
+        shell: bash
+        working-directory: Infrastructure/${{ inputs.working-directory }}
+        run: |
+          ENV_SUFFIX_UPPER=$(echo "${{ vars.ENV_SUFFIX }}" | tr '[:lower:]' '[:upper:]')
+          terraform init -backend-config="${ENV_SUFFIX_UPPER}/${{ vars.REGION_SUFFIX }}-${{ inputs.backend_tfvars_file }}"
+  
+      - name: Terraform Validate
+        shell: bash
+        working-directory: Infrastructure/${{ inputs.working-directory }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        shell: bash
+        working-directory: Infrastructure/${{ inputs.working-directory }}
+        run: terraform plan -input=false

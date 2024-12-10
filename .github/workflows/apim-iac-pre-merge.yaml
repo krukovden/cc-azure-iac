@@ -1,0 +1,43 @@
+# This is a basic workflow to help you get started with Actions
+
+name: APIM Terraform CI
+
+# Controls when the workflow will run
+on:
+  # Triggers the workflow on push or pull request events but only for the "main" branch
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'Infrastructure/APIM/**/*'
+      - '.github/workflows/apim-iac-pre-merge.yaml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'Infrastructure/APIM/**/*'
+      - '.github/workflows/apim-iac-pre-merge.yaml'
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  check-dev:
+    # The type of runner that the job will run on
+    name: Validate DEV
+    uses: ./.github/workflows/validate-and-plan.yaml
+    with:
+      working-directory: "APIM"
+      use_environment: "Dev South Central US"
+      backend_tfvars_file: "backend.tfvars"
+    secrets: inherit
+
+  check-qa:
+    # The type of runner that the job will run on
+    name: Validate QA
+    uses: ./.github/workflows/validate-and-plan.yaml
+    with:
+      working-directory: "APIM"
+      use_environment: "QA South Central US"
+      backend_tfvars_file: "backend.tfvars"
+    secrets: inherit

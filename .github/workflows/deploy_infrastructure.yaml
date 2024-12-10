@@ -1,0 +1,189 @@
+name: Deploy Specific Infrastructure to Azure
+
+on:
+  workflow_call:
+    inputs:
+      use_environment:
+        required: true
+        type: string
+        description: "Target Environment"
+      working-directory:
+        required: true
+        type: string
+        description: "Working directory for Terraform resources"
+      config_tfvars_file:
+        required: false
+        type: string
+        default: terraform.tfvars
+        description: "Terraform tfvars configuration file"
+      backend_tfvars_file:
+        required: true
+        type: string
+        default: backend.tfvars
+        description: "Terraform tfvars backend file"
+      perform_apply:
+        description: "Run 'terraform apply'. In case it is false, only plan will be executed."
+        required: true
+        type: boolean
+        default: false
+      use_workflow_call:
+        required: false
+        type: boolean
+        default: true
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        description: "Environment"
+        options:
+          - "Dev South Central US"
+          - "Dev Central Canada"
+
+          - "QA South Central US"
+          - "QA Central Canada"
+
+          - "Staging South Central US"
+      working-directory:
+        description: "Working directory for Terraform resources"
+        type: choice
+        default: Shared
+        options:
+          - Shared
+          - APIM
+          - Veson
+          - VesonApimApi
+          - TenantAdapters
+          - TenantAdaptersApimApi
+          - VoyagePlanAdapters
+          - VoyagePlanAdaptersApimApi
+          - ECDIS
+          - PortInfo
+          - PortInfoApimApi
+          - WaypointsAdapters
+          - WaypointsAdaptersApimApi
+          - ERP
+          - ERPApimApi
+          - TestClients
+          - OnboardingTool
+          - OnboardingMiddleware
+          - OnboardingMiddlewareApimApi
+          - OnboardingMiddlewareVesselProcessingApimApi
+          - VoyageManagerAdapter
+          - VoyageManagerAdapterApimApi
+      config_tfvars_file:
+        required: true
+        default: terraform.tfvars
+        description: "Terraform tfvars configuration file"
+      backend_tfvars_file:
+        required: true
+        default: backend.tfvars
+        description: "Terraform tfvars backend file"
+      perform_apply:
+        required: true
+        type: boolean
+        default: false
+        description: "Run 'terraform apply'. In case it is false, only plan will be executed."
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.AZURE_AD_CLIENT_SECRET }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  GH_TOKEN: ${{ secrets.GH_PAT }}
+  GH_PUBLISHER_NAME: ${{ github.triggering_actor }}
+  TF_DATABASE_USERNAME: ${{ secrets.DATABASE_USERNAME }}
+  TF_DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: ${{ inputs.perform_apply == 'true' && 'Deploying' || 'Planinng' }} ${{ inputs.working-directory }} to ${{ vars.ENV_SUFFIX }}
+    environment: ${{  inputs.use_environment || github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        if: inputs.USE_WORKFLOW_CALL == true
+        with:
+          repository: "abs-wavesight/cc-azure-iac"
+
+          token: ${{ secrets.GH_PAT }}
+
+      - name: "Checkout Current Directory"
+        if: inputs.use_workflow_call != true
+        uses: actions/checkout@v3
+
+      - name: List all files
+        run: find . -type f
+
+      - name: "Checkout Private Modules"
+        uses: actions/checkout@v3
+        with:
+          repository: abs-wavesight/azure-infra-terraform-modules
+          token: ${{ secrets.GH_PAT }}
+          path: SharedModules
+
+      - name: List all files with Modules
+        run: find . -type f
+
+      - name: "AZ Login"
+        uses: abs-wavesight/github-action-workflows/actions/az-login@main
+        with:
+          subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set GitHub variables.
+        id: set-region-variables
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID}}
+          TF_RMQ_CONNECTION_STRING: ${{ secrets.TF_RMQ_CONNECTION_STRING }}
+          TF_RMQ_PASS: ${{ secrets.TF_RMQ_PASS }}
+          TF_RMQ_URL: ${{ secrets.TF_RMQ_URL }}
+          TF_RMQ_USER: ${{ secrets.TF_RMQ_USER }}
+          TF_RMQ_VHOST: ${{ secrets.TF_RMQ_VHOST }}
+          TF_RMQ_PORT: ${{ secrets.TF_RMQ_PORT }}
+          TF_APIM_TENANT: ${{ secrets.TF_APIM_TENANT }}
+        shell: bash
+        run: |
+          echo "TF_RMQ_CONNECTION_STRING=${{ env.TF_RMQ_CONNECTION_STRING }}" >> $GITHUB_ENV
+          echo "TF_RMQ_PASS=${{ env.TF_RMQ_PASS }}" >> $GITHUB_ENV
+          echo "TF_RMQ_URL=${{ env.TF_RMQ_URL }}" >> $GITHUB_ENV
+          echo "TF_RMQ_USER=${{ env.TF_RMQ_USER }}" >> $GITHUB_ENV
+          echo "TF_RMQ_VHOST=${{ env.TF_RMQ_VHOST }}" >> $GITHUB_ENV
+          echo "TF_RMQ_PORT=${{ env.TF_RMQ_PORT }}" >> $GITHUB_ENV          
+          echo "TF_APIM_TENANT=${{ env.TF_APIM_TENANT }}" >> $GITHUB_ENV
+          echo "TF_ENV=${{ vars.ENV_SUFFIX}}" >> $GITHUB_ENV   
+          echo "TF_VAR_ENV=${{ vars.ENV_SUFFIX }}" >> $GITHUB_ENV               
+          echo "ARM_SUBSCRIPTION_ID=${{ env.ARM_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "TF_VAR_REGION_SUFFIX"=${{ vars.REGION_SUFFIX }} >> $GITHUB_ENV
+          echo "TF_VAR_REGION_CODE"=${{ vars.REGION_CODE }} >> $GITHUB_ENV
+          echo "TF_VAR_MDF_VESSEL_BASE_URL"=${{ vars.MDF_VESSEL_BASE_URL }} >> $GITHUB_ENV
+          echo "TF_VAR_MDF_TENANT_BASE_URL"=${{ vars.MDF_TENANT_BASE_URL }} >> $GITHUB_ENV
+
+      - name: Terraform Init
+        shell: bash
+        working-directory: ./Infrastructure/${{ inputs.working-directory }}
+        run: |
+          ENV_SUFFIX_UPPER=$(echo "${{ vars.ENV_SUFFIX }}" | tr '[:lower:]' '[:upper:]')
+          terraform init -backend-config="${ENV_SUFFIX_UPPER}/${{ vars.REGION_SUFFIX }}-${{ inputs.backend_tfvars_file }}"
+
+      - name: Terraform Plan
+        shell: bash
+        working-directory: Infrastructure/${{ inputs.working-directory }}
+        run: terraform plan -input=false
+
+      - name: Terraform Apply
+        if: inputs.perform_apply == true
+        shell: bash
+        working-directory: Infrastructure/${{ inputs.working-directory }}
+        run: terraform apply -auto-approve -input=false
+
+      - name: Get Terraform Outputs
+        id: terraform_output
+        shell: bash
+        working-directory: Infrastructure/${{ inputs.working-directory }}
+        run: |
+          echo "::set-output name=postgresql_connection_string_template::$(terraform output -raw postgresql_connection_string_template)"
+
+      - name: Use Terraform Output
+        run: echo "PostgreSQL Server FQDN is ${{ steps.terraform_output.outputs.postgresql_connection_string_template }}"

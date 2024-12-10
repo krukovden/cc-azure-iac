@@ -1,0 +1,75 @@
+name: Prepare Terraform infrastructure
+
+on: 
+  workflow_call:
+    inputs:
+      use_environment:
+       required: true
+       type: string
+       description: "Target Environment"     
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        description: 'Environment'
+        options:
+          - 'Dev South Central US'
+          - 'Dev Central Canada'
+
+          - 'QA South Central US'
+          - 'QA Central Canada'
+
+          - 'Staging South Central US'
+          - 'Staging Europe'    
+
+permissions:
+      id-token: write
+      contents: read
+
+env:
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.AZURE_AD_CLIENT_SECRET }} 
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment:  ${{  inputs.use_environment || github.event.inputs.environment }}
+    name: Prepare TERRAFORM infrastructure for ${{  inputs.use_environment || github.event.inputs.environment }}
+    steps:
+
+    - name: "AZ Login"
+      uses: abs-wavesight/github-action-workflows/actions/az-login@main
+      with:
+        subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}    
+
+    - name: Check and Create Resource group
+      run: |
+        ENV=$(echo ${{ vars.ENV_SUFFIX }} | tr '[:upper:]' '[:lower:]')
+        REGION_SUFFIX=${{ vars.REGION_SUFFIX }}
+        RESOURCE_GROUP_NAME="rg-$REGION_SUFFIX-cc-cp-tfstate"
+        LOCATION=${{vars.REGION_SUFFIX }}
+        STORAGE_ACCOUNT_NAME="sacctfstate"${REGION_SUFFIX}${ENV}
+        CONTAINER_NAME="tfstate-"${ENV}
+
+        if [ $(az group exists --name $RESOURCE_GROUP_NAME) = false ]; then
+          az group create --name $RESOURCE_GROUP_NAME --location $LOCATION
+          echo "Create resource group '${RESOURCE_GROUP_NAME}'"
+        else
+          echo "Resource group '${RESOURCE_GROUP_NAME}' exists"
+        fi
+
+        if az storage account show --name $STORAGE_ACCOUNT_NAME --resource-group $RESOURCE_GROUP_NAME > /dev/null 2>&1; then
+          echo "Storage account '${STORAGE_ACCOUNT_NAME}' exists"
+        else
+          az storage account create --name $STORAGE_ACCOUNT_NAME --resource-group $RESOURCE_GROUP_NAME
+          echo "Create storage account '${STORAGE_ACCOUNT_NAME}'"
+        fi
+
+        if [ -z $(az storage container list --account-name $STORAGE_ACCOUNT_NAME --query "[?name=='$CONTAINER_NAME']" --output tsv --auth-mode login)]; then
+          az storage container create --name $CONTAINER_NAME --account-name $STORAGE_ACCOUNT_NAME --auth-mode login
+          echo "Create storage container '${CONTAINER_NAME}'"
+        else
+          echo "Storage container '${CONTAINER_NAME}' exists"
+        fi

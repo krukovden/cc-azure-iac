@@ -1,0 +1,64 @@
+name: Get FQDN String
+
+on:
+  workflow_call:
+    inputs:  
+     resource_group_name:
+        description: 'Specifies the Azure Resource Group'
+        required: true
+        type: string         
+     resource_name:        
+        type: string   
+        description: "Azure SQL Database Server Name without environment"   
+     use_environment:
+        required: true
+        type: string
+        description: "Target Environment"   
+         
+    secrets:
+      AZURE_CLIENT_ID:
+          required: true
+      AZURE_AD_CLIENT_SECRET:
+          required: true
+      AZURE_TENANT_ID:
+          required: true    
+        
+    
+    outputs:
+      fqdn_string:
+        description: "Fully Qualified Domain Name"
+        value: ${{ jobs.get_db_connection_string.outputs.fqdn_string }}
+      database_name:
+        description: "Database Name"
+        value: ${{ jobs.get_db_connection_string.outputs.database_name }}
+jobs:
+    get_db_connection_string:
+        runs-on: ubuntu-latest
+        environment: ${{ inputs.use_environment }}
+        outputs:
+            fqdn_string: ${{ steps.extract.outputs.fqdn_string }}
+            database_name: ${{ steps.extract.outputs.database_name }}   
+        steps:     
+            - name: Login via Azure CLI
+              uses: azure/login@v2
+              with:
+                creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_AD_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'      
+      
+
+            - name: get FQDN from Azure
+              id: extract
+              run: |
+                  RESOURCE_GROUP_NAME=${{ inputs.resource_group_name }}   
+                  RESOURCE_NAME=${{ inputs.resource_name  }}  
+                  RESOURCE_JSON=$(az postgres flexible-server show --name $RESOURCE_NAME --resource-group $RESOURCE_GROUP_NAME --output json)                   
+                 
+                  echo "Azure SQL Database Server Name: $RESOURCE_JSON"
+
+                  FQDN_STRING=$(echo "$RESOURCE_JSON" | jq -r '.fullyQualifiedDomainName')
+                  DATABASE=$(echo "$RESOURCE_JSON" | jq -r '.administratorLogin')
+
+                  echo "FQDN: $FQDN_STRING"                  
+                  echo "Database: $DATABASE"   
+                  
+                  echo "::set-output name=fqdn_string::$FQDN_STRING"
+                  echo "::set-output name=database_name::$DATABASE"

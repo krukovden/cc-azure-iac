@@ -1,0 +1,420 @@
+name: Deploy & Publish all solution to Azure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        description: 'Environment'
+        options:
+          - 'Dev South Central US'
+          - 'Dev Central Canada'
+
+          - 'QA South Central US'
+          - 'QA Central Canada'
+
+          - 'Staging South Central US'
+          - 'Staging Europe'    
+
+      perform_apply:        
+        required: true
+        type: boolean
+        default: false
+        description: "Terraform apply; if false, execute plan only."  
+         
+      tenants_version:
+        type: string
+        description: ---- 🖥️📱Tenant Managment API  ----        
+        default: latest 
+          
+      erp_version:
+          type: string
+          description: ----📊Reports + ERP (Set 'none' to Skip)          
+          default: latest
+
+      voyge_plan_version:
+          type: string
+          description: ---- 🗺️Voyge Plan API version (Set 'none' to Skip)          
+          default: latest
+      veson_version:
+          type: string
+          description: Veson version (Set 'none' to Skip)          
+          default: latest
+      seed_veson_data:
+          type: boolean
+          description: Seed Veson Mock Data         
+          default: true 
+
+      waypoints_version:
+        type: string
+        description: ---- 📍Waypoints API version (Set 'none' to Skip)         
+        default: latest
+      ecdis_version:
+        type: string
+        description: ECDIS version 
+        default: latest
+             
+      port_info_version:
+          type: string
+          description: ---- Select UN ⚓Port Info API version (Set 'none' to Skip)          
+          default: latest   
+
+jobs:  
+  #======= Create shared resources =======
+  config:
+    runs-on: ubuntu-latest
+    name: Start for ${{ github.event.inputs.ENVIRONMENT }} Environment
+    environment:  ${{  github.event.inputs.environment }}
+    outputs: 
+      config_tfvars_file: "terraform.tfvars"
+      backend_tfvars_file: "backend.tfvars"
+      resource_group_name: ${{ steps.set-env-output.outputs.resource_group_name }}
+      db_resource_name: ${{ steps.set-env-output.outputs.db_resource_name }}
+      environment_suffix: ${{ steps.set-env-output.outputs.environment_suffix }}
+      environment_suffix_upper: ${{ steps.set-env-output.outputs.environment_suffix_upper }}  
+      dbResourceGroupName: ${{ steps.set-env-output.outputs.dbResourceGroupName }}    
+    steps:      
+      - name: Setup Configuration
+        id: set-env-output
+        shell: pwsh
+        run: |
+          echo "Configuring environment variables..."   
+          $region ='${{vars.REGION_SUFFIX }}' 
+          $env_suffix = '${{ vars.ENV_SUFFIX }}'
+          $env_suffix_lower = $env_suffix.ToLower() 
+          
+          $dbResourceName="cc-cp-norm-server-$region-${env_suffix_lower}"                 
+
+          $env_suffix_upper = $env_suffix.ToUpper()    
+          $resource_group_name='rg-{0}-commoncore-001' -f $region    
+          $dbResourceGroupName = "$resource_group_name-data"  
+                 
+          echo "::set-output name=db_resource_name::$dbResourceName"    
+          echo "::set-output name=environment_suffix::$env_suffix_lower" 
+          echo "::set-output name=environment_suffix_upper::$env_suffix_upper"  
+          echo "::set-output name=resource_group_name::$resource_group_name"  
+          echo "::set-output name=dbResourceGroupName::$dbResourceGroupName"
+          
+  prepare-teraform:
+    name: Prepare Terraform
+    needs: [config]
+    if: success()
+    uses: abs-wavesight/cc-azure-iac/.github/workflows/create_terraform_backend_storage.yaml@main
+    with:
+      use_environment: ${{ github.event.inputs.environment }}
+    secrets: inherit
+
+  deploy-infrastructure-shared:
+    name: ${{ github.event.inputs.perform_apply == 'true' && 'Deploying' || 'Planinng' }} Shared infrastructure 
+    uses: abs-wavesight/cc-azure-iac/.github/workflows/deploy_infrastructure.yaml@main
+    needs: [config, prepare-teraform] 
+    if: success()   
+    with:
+      use_environment: ${{ github.event.inputs.environment }}
+      working-directory: Shared       
+      backend_tfvars_file: ${{ needs.config.outputs.backend_tfvars_file }}    
+      perform_apply: ${{ github.event.inputs.perform_apply == 'true' }}      
+    secrets: inherit 
+  
+  # ====================================================================
+  
+  # ======= Create Tables and seed default data =======   
+  retrieve-configuration:
+    needs: [config, deploy-infrastructure-shared] 
+    name: Retrieve DB Configuration
+    uses: abs-wavesight/cc-azure-iac/.github/workflows/get-db-string.yaml@main   
+    if: success()
+    secrets: inherit     
+    with:      
+      use_environment: ${{ github.event.inputs.environment }}
+      resource_group_name: ${{ needs.config.outputs.dbResourceGroupName }}
+      resource_name: ${{ needs.config.outputs.db_resource_name }}
+
+  db-config:
+    runs-on: ubuntu-latest
+    needs: [retrieve-configuration]
+    if: success()
+    name: Extract db connection string
+    outputs: 
+      database_url: ${{ steps.format-connection-string.outputs.database_url }}        
+    steps:
+      - name: Format Connection String
+        id: format-connection-string
+        run: |
+          DATABASE_URL="jdbc:postgresql://${{ needs.retrieve-configuration.outputs.fqdn_string }}:5432/${{ needs.retrieve-configuration.outputs.database_name }}?sslmode=require"
+          echo "::set-output name=database_url::$DATABASE_URL"         
+
+  update-db:
+     needs: [db-config]
+     if: ${{ github.event.inputs.perform_apply == 'true' }}
+     name: Create tables     
+     uses: abs-wavesight/cc-cloud-liquibase/.github/workflows/database-update-cd.yml@main
+     with:      
+       USE_ENVIRONMENT: ${{ github.event.inputs.environment }}      
+       DATABASE_URL: ${{ needs.db-config.outputs.database_url }}       
+     secrets: inherit
+
+  seed-data-db:
+     needs: [db-config, update-db]
+     if: ${{ github.event.inputs.perform_apply == 'true' }}
+     name: Seed Partners Data to DB
+     uses: abs-wavesight/cc-cloud-liquibase/.github/workflows/database-seed-cd.yml@main 
+     with:      
+       USE_ENVIRONMENT: ${{ github.event.inputs.environment }}
+       DATABASE_URL: ${{ needs.db-config.outputs.database_url }}       
+     secrets: inherit
+   # ====================================================================
+
+   # ======= APIM ======= 
+  deploy-apim:
+   name: ${{ github.event.inputs.perform_apply == 'true' && 'Deploying' || 'Planinng' }} APIM
+   uses: abs-wavesight/cc-azure-iac/.github/workflows/deploy_infrastructure.yaml@main
+   needs: [ config, update-db]
+   if: always()
+   with:
+     use_environment: ${{ github.event.inputs.environment }}
+     working-directory: APIM    
+     backend_tfvars_file: ${{ needs.config.outputs.backend_tfvars_file }}    
+     perform_apply: ${{ github.event.inputs.perform_apply == 'true' }}     
+   secrets: inherit
+   # ====================================================================
+
+  # ======= Tenant APIs ======= 
+  deploy-infrastructure-tenant:
+     name: ${{ github.event.inputs.perform_apply == 'true' && 'Deploying' || 'Planinng' }} Tenant Infrastructure
+     uses: abs-wavesight/cc-azure-iac/.github/workflows/deploy_infrastructure.yaml@main
+     needs: [deploy-apim, config] 
+     if: ${{ always() && contains(join(needs.*.result, ','), 'success') }}
+     with:
+       use_environment: ${{ github.event.inputs.environment }}
+       working-directory: TenantAdapters              
+       backend_tfvars_file: ${{ needs.config.outputs.backend_tfvars_file }}    
+       perform_apply: ${{ github.event.inputs.perform_apply == 'true' }}       
+     secrets: inherit
+
+  publish-tenants:
+    name: Publish Tenant APIs
+    uses: abs-wavesight/cc-cloud-tenant-adapters/.github/workflows/tenant-adapter-deploy.yml@main
+    needs: [ config, deploy-infrastructure-tenant]   
+    if: ${{ always() && contains(join(needs.*.result, ','), 'success') }}  
+    with:
+      USE_ENVIRONMENT: ${{ github.event.inputs.environment }}
+      USE_VERSION: ${{ github.event.inputs.tenants_version == 'none' && 'latest' || github.event.inputs.tenants_version }}  
+      RESOURCE_GROUP_NAME: ${{ needs.config.outputs.resource_group_name }}     
+    secrets: inherit 
+    
+  deploy-tenant-apim:
+     name: ${{ github.event.inputs.perform_apply == 'true' && 'Deploying' || 'Planinng' }} Tenant APIM Infrastructure
+     uses: abs-wavesight/cc-azure-iac/.github/workflows/deploy_infrastructure.yaml@main
+     needs: [ publish-tenants, config]  
+     if: ${{ always() && contains(join(needs.*.result, ','), 'success') }}     
+     with:
+       use_environment: ${{ github.event.inputs.environment }}
+       working-directory: TenantAdaptersApimApi          
+       backend_tfvars_file: ${{ needs.config.outputs.backend_tfvars_file }}    
+       perform_apply: ${{ github.event.inputs.perform_apply == 'true' }}       
+     secrets: inherit
+
+    # ====================================================================    
+    
+  # ======= Reports + ERP =======
+  deploy-infrastructure-erp:
+    name: ${{ github.event.inputs.perform_apply == 'true' && 'Deploying' || 'Planinng' }} Reports Infrastructure
+    needs: [ publish-tenants, config]
+    if: ${{ github.event.inputs.erp_version != 'none' && always()}}
+    uses: abs-wavesight/cc-azure-iac/.github/workflows/deploy_infrastructure.yaml@main   
+    with:
+      use_environment: ${{ github.event.inputs.environment }}
+      working-directory: ERP       
+      backend_tfvars_file: ${{ needs.config.outputs.backend_tfvars_file }}    
+      perform_apply: ${{ github.event.inputs.perform_apply == 'true' }}      
+    secrets: inherit   
+
+  publish-erp:
+    name: Publish ERP
+    needs: [config, deploy-infrastructure-erp]  
+    if: ${{ github.event.inputs.erp_version != 'none' && always() && contains(join(needs.*.result, ','), 'success') }}
+    uses: abs-wavesight/cc-cloud-partner-adapters-erp/.github/workflows/erp-adapter-deploy.yml@main     
+    with:
+        USE_ENVIRONMENT: ${{ github.event.inputs.environment }}
+        VERSION: ${{ github.event.inputs.erp_version == 'none' && 'latest' || github.event.inputs.erp_version }}  
+        RESOURCE_GROUP_NAME: ${{ needs.config.outputs.resource_group_name }}   
+        USE_IMPORT_REPORT: true
+        USE_VALIDATION_REPORT: false
+        USE_UPDATE_REPORT: false
+    secrets: inherit 
+  #   # ====================================================================
+
+  # ======= Voyage Plan API + Veson =======
+  deploy-infrastructure-voyage-plan:
+    name: ${{ github.event.inputs.perform_apply == 'true' && 'Deploying' || 'Planinng' }} Voyage Plan API infrastructure
+    needs: [ config, publish-erp]
+    if: ${{ github.event.inputs.voyge_plan_version != 'none' && always()}}
+    uses: abs-wavesight/cc-azure-iac/.github/workflows/deploy_infrastructure.yaml@main      
+    with:
+      use_environment: ${{ github.event.inputs.environment }}
+      working-directory: VoyagePlanAdapters      
+      config_tfvars_file: ${{ needs.config.outputs.config_tfvars_file }}
+      backend_tfvars_file: ${{ needs.config.outputs.backend_tfvars_file }}    
+      perform_apply: ${{ github.event.inputs.perform_apply == 'true' }}
+    secrets: inherit  
+
+  publish-voyge-plan:
+    name: Publish Voyge Plan API
+    needs: [config, deploy-infrastructure-voyage-plan]   
+    if: ${{ github.event.inputs.voyge_plan_version != 'none' && always() && contains(join(needs.*.result, ','), 'success') }}     
+    uses: abs-wavesight/cc-cloud-dataset-adapters-voyage-plan/.github/workflows/voyge-plan-adapter-deploy.yml@main
+    with:
+      USE_ENVIRONMENT: ${{ github.event.inputs.environment }}
+      USE_VERSION: ${{ github.event.inputs.voyge_plan_version == 'none' && 'latest' || github.event.inputs.voyge_plan_version }} 
+      RESOURCE_GROUP_NAME: ${{ needs.config.outputs.resource_group_name }} 
+    secrets: inherit
+
+  deploy-voyge-plan-apim:
+     name: ${{ github.event.inputs.perform_apply == 'true' && 'Deploying' || 'Planinng' }} Voyge Plan APIM Infrastructure
+     uses: abs-wavesight/cc-azure-iac/.github/workflows/deploy_infrastructure.yaml@main
+     needs: [ publish-voyge-plan, config]  
+     if: ${{ github.event.inputs.voyge_plan_version != 'none' && always() && contains(join(needs.*.result, ','), 'success') }}  
+     with:
+       use_environment: ${{ github.event.inputs.environment }}
+       working-directory: VoyagePlanAdaptersApimApi          
+       backend_tfvars_file: ${{ needs.config.outputs.backend_tfvars_file }}    
+       perform_apply: ${{ github.event.inputs.perform_apply == 'true' }}       
+     secrets: inherit
+
+
+  deploy-infrastructure-veson:
+    name: ${{ github.event.inputs.perform_apply == 'true' && 'Deploying' || 'Planinng' }} Veson Infrastructure
+    needs: [ publish-voyge-plan, config]
+    if: ${{ github.event.inputs.veson_version != 'none' && always()}}
+    uses: abs-wavesight/cc-azure-iac/.github/workflows/deploy_infrastructure.yaml@main     
+    with:
+      use_environment: ${{ github.event.inputs.environment }}
+      working-directory: Veson      
+      config_tfvars_file: ${{ needs.config.outputs.config_tfvars_file }}
+      backend_tfvars_file: ${{ needs.config.outputs.backend_tfvars_file }}    
+      perform_apply: ${{ github.event.inputs.perform_apply == 'true' }}
+    secrets: inherit
+  
+  publish-veson:
+    name: Publish Veson
+    needs: [config, deploy-infrastructure-veson]
+    uses: abs-wavesight/cc-cloud-partner-adapters-veson/.github/workflows/veson-adapter-deploy.yml@main
+    if: ${{ github.event.inputs.veson_version != 'none' && always() && contains(join(needs.*.result, ','), 'success')}}    
+    with:
+      USE_ENVIRONMENT: ${{ github.event.inputs.environment }}
+      USE_VERSION: ${{ github.event.inputs.veson_version == 'none' && 'latest' || github.event.inputs.veson_version}}
+      RESOURCE_GROUP_NAME: ${{ needs.config.outputs.resource_group_name }} 
+    secrets: inherit
+  
+  seed-veson-data:
+    name: Seed Veson Data
+    needs: [publish-veson, db-config]
+    uses: abs-wavesight/cc-cloud-partner-adapters-veson/.github/workflows/veson-adapter-seed-publish.yml@main    
+    if: ${{ github.event.inputs.seed_veson_data == 'true' && always() && contains(join(needs.*.result, ','), 'success')}}
+    with:
+      USE_ENVIRONMENT: ${{ github.event.inputs.environment }}      
+    secrets: inherit  
+  
+    # ====================================================================     
+
+    # ======= Waypoints API + ECDIS =======
+  deploy-infrastructure-waypoints:
+    name: ${{ github.event.inputs.perform_apply == 'true' && 'Deploying' || 'Planinng' }} Waypoints Infrastructure
+    needs: [ config, publish-veson]
+    if: ${{ github.event.inputs.waypoints_version != 'none' && always() }}
+    uses: abs-wavesight/cc-azure-iac/.github/workflows/deploy_infrastructure.yaml@main    
+    with:
+      use_environment: ${{ github.event.inputs.environment }}
+      working-directory: WaypointsAdapters      
+      config_tfvars_file: ${{ needs.config.outputs.config_tfvars_file }}
+      backend_tfvars_file: ${{ needs.config.outputs.backend_tfvars_file }}    
+      perform_apply: ${{ github.event.inputs.perform_apply == 'true' }}
+    secrets: inherit   
+ 
+  publish-waypoints:
+     name: Publish Waypoints API
+     needs: [config, deploy-infrastructure-waypoints]
+     if: ${{ github.event.inputs.waypoints_version != 'none' && always() && contains(join(needs.*.result, ','), 'success')}}
+     uses: abs-wavesight/cc-cloud-dataset-adapters-waypoints/.github/workflows/waypoints-adapter-deploy.yml@main     
+     with:
+        USE_ENVIRONMENT: ${{ github.event.inputs.environment }}
+        USE_VERSION: ${{ github.event.inputs.waypoints_version == 'none' && 'latest' || github.event.inputs.waypoints_version}} 
+        RESOURCE_GROUP_NAME: ${{ needs.config.outputs.resource_group_name }}  
+     secrets: inherit
+
+  deploy-waypoints-apim:
+     name: ${{ github.event.inputs.perform_apply == 'true' && 'Deploying' || 'Planinng' }} Waypoints APIM Infrastructure
+     uses: abs-wavesight/cc-azure-iac/.github/workflows/deploy_infrastructure.yaml@main
+     needs: [ publish-waypoints, config]  
+     if: ${{ github.event.inputs.waypoints_version != 'none' && always() && contains(join(needs.*.result, ','), 'success')}}
+     with:
+       use_environment: ${{ github.event.inputs.environment }}
+       working-directory: WaypointsAdaptersApimApi          
+       backend_tfvars_file: ${{ needs.config.outputs.backend_tfvars_file }}    
+       perform_apply: ${{ github.event.inputs.perform_apply == 'true' }}       
+     secrets: inherit
+ 
+  deploy-infrastructure-ecdis:
+     name: ${{ github.event.inputs.perform_apply == 'true' && 'Deploying' || 'Planinng' }} ECDIS infrastructure
+     needs: [ deploy-infrastructure-waypoints, config]
+     if: ${{ github.event.inputs.ecdis_version != 'none' && always()}}
+     uses: abs-wavesight/cc-azure-iac/.github/workflows/deploy_infrastructure.yaml@main    
+     with:
+       use_environment: ${{ github.event.inputs.environment }}
+       working-directory: ECDIS       
+       config_tfvars_file: ${{ needs.config.outputs.config_tfvars_file }}
+       backend_tfvars_file: ${{ needs.config.outputs.backend_tfvars_file }}    
+       perform_apply: ${{ github.event.inputs.perform_apply == 'true' }}
+     secrets: inherit           
+    
+  publish-ecdis:
+     name: Publish ECDIS
+     if: ${{ github.event.inputs.ecdis_version != 'none' && always() && contains(join(needs.*.result, ','), 'success')}}
+     uses: abs-wavesight/cc-cloud-partner-adapters-ecdis/.github/workflows/ecdis-adapter-deploy.yml@main
+     needs: [config, deploy-infrastructure-ecdis]
+     with:
+       USE_ENVIRONMENT: ${{ github.event.inputs.environment }}
+       USE_VERSION: ${{ github.event.inputs.ecdis_version == 'none' && 'latest' || github.event.inputs.waypoints_version}}
+       RESOURCE_GROUP_NAME: ${{ needs.config.outputs.resource_group_name }} 
+     secrets: inherit  
+     # ====================================================================
+
+     # ======= Port APIs =======
+  deploy-infrastructure-port-info:
+    name: ${{ github.event.inputs.perform_apply == 'true' && 'Deploying' || 'Planinng' }} Port Info Infrastructure
+    needs: [ config, publish-ecdis]
+    if: ${{ github.event.inputs.port_info_version != 'none' && always()}}
+    uses: abs-wavesight/cc-azure-iac/.github/workflows/deploy_infrastructure.yaml@main    
+    with:
+      use_environment: ${{ github.event.inputs.environment }}
+      working-directory: PortInfo      
+      config_tfvars_file: ${{ needs.config.outputs.config_tfvars_file }}
+      backend_tfvars_file: ${{ needs.config.outputs.backend_tfvars_file }}    
+      perform_apply: ${{ github.event.inputs.perform_apply == 'true' }}
+    secrets: inherit
+
+  publish-port-info:
+    name: Publish Ports
+    if: ${{ github.event.inputs.port_info_version != 'none'  && always() && contains(join(needs.*.result, ','), 'success')}}
+    needs: [config, deploy-infrastructure-port-info]
+    uses: abs-wavesight/cc-cloud-port-info-adapter/.github/workflows/port-info-adapter-deploy.yml@main     
+    with:
+      USE_ENVIRONMENT: ${{ github.event.inputs.environment }}      
+      USE_VERSION: ${{ github.event.inputs.port_info_version == 'none' && 'latest' || github.event.inputs.waypoints_version}}  
+      RESOURCE_GROUP_NAME: ${{ needs.config.outputs.resource_group_name }}    
+    secrets: inherit
+
+  deploy-port-info-apim:
+     name: ${{ github.event.inputs.perform_apply == 'true' && 'Deploying' || 'Planinng' }} Port Info APIM Infrastructure
+     uses: abs-wavesight/cc-azure-iac/.github/workflows/deploy_infrastructure.yaml@main
+     needs: [ publish-port-info, config]  
+     if: ${{ github.event.inputs.port_info_version != 'none'  && always() && contains(join(needs.*.result, ','), 'success')}}
+     with:
+       use_environment: ${{ github.event.inputs.environment }}
+       working-directory: PortInfoApimApi          
+       backend_tfvars_file: ${{ needs.config.outputs.backend_tfvars_file }}    
+       perform_apply: ${{ github.event.inputs.perform_apply == 'true' }}       
+     secrets: inherit
+    
+    # ====================================================================
