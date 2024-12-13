@@ -82,6 +82,8 @@ locals {
         "PERM_STRG_NAME_KV_NAME"                 = var.onboarding_middleware_vessel_processing_key_vault_params_template.permanent_blob_account_name
         "PERM_STRG_KEY_KV_NAME"                  = var.onboarding_middleware_vessel_processing_key_vault_params_template.permanent_blob_account_key
         "PERM_STRG_URI_KV_NAME"                  = var.onboarding_middleware_vessel_processing_key_vault_params_template.permanent_blob_account_url
+        "PERM_STRG_MDF_VESSEL_API_BASE_URL"      = var.MDF_VESSEL_BASE_URL
+        "PERM_STRG_MDF_TENANT_API_BASE_URL"      = var.MDF_TENANT_BASE_URL
         "TENANT_DATA_SOURCE_QUEUE_NAME"          = format(var.onboardingmiddleware_api_func_app_settings_template.TENANT_DATA_SOURCE_QUEUE_NAME, local.formatted_ui_client_id)
         "AzureSignalRConnectionString"           = data.azurerm_key_vault_secret.signalR_connection_string.value
       }
